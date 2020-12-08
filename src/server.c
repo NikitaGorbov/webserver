@@ -19,6 +19,12 @@ enum errors {
     ERR_LISTEN
 };
 
+enum typesOfFiles {
+    FILE_BINARY,
+    FILE_MULTIMEDIA,
+    FILE_TEXT
+};
+
 int init_socket(int port) {
     //open socket, return socket descriptor
     int server_socket = socket(PF_INET, SOCK_STREAM, 0);
@@ -59,10 +65,11 @@ char *get_word(int socket, int *endOfLineFlag) {
         //c = getchar();
         if (read(socket, &c, 1) <= 0) {
             printf("Client is unreachable\n");
+            free(word);
             exit(1);
         }
         
-        word = realloc(word, sizeof(char) * (i + 1));
+        word = realloc(word, sizeof(char *) * (i + 1));
         if (!word) {
             printf("Realloc failed\n");
             free(word);
@@ -131,23 +138,88 @@ int filetype(char *filename) {
     int i;
     for (i = 0; filename[i]; i++) {
         if (filename[i] == '.') {
-            if (!strcmp(filename + i, ".c")) {
-                printf(".c\n");
-                return 1;
-            }
             if (!strcmp(filename + i, ".png")) {
                 printf("multimedia\n");
-                return 2;
+                return FILE_MULTIMEDIA;
             }
             if (!strcmp(filename + i, ".html") ||
                 !strcmp(filename + i, ".txt")) {
                 printf("html/txt\n");
-                return 3;
+                return FILE_TEXT;
             }
         }
     }
-    // binary
-    return 0;
+    return FILE_BINARY;
+}
+
+void send_text(char *pathToFile, int socket) {
+    int filesize = get_file_size(pathToFile);
+    char buf;
+
+    char charFilesize[11];
+    snprintf(charFilesize, 10, "%d", filesize);
+
+    FILE *fd = fopen(pathToFile, "r");
+    printf("HTTP/1.1 200\n\n");
+    write(socket, "HTTP/1.1 200\nContent-Length: ", 29);
+    write(socket, charFilesize, strlen(charFilesize));
+    write(socket, "\n\n", 2);
+
+    buf = fgetc(fd);
+    while (buf != EOF) {
+        write(socket, &buf, 1);
+        buf = fgetc(fd);
+    }
+    fclose(fd);
+}
+
+void send_bin(char *pathToFile, char *filename, int socket) {
+    char *binOutput = NULL;
+    char buf;
+    char charFilesize[11];
+    int filesize, i = 0;
+    int fd[2];
+
+    pipe(fd);
+    if (fork() == 0) {
+        dup2(fd[1], 1);
+        close(fd[0]);
+        close(fd[1]);
+        if (execlp(pathToFile, filename, NULL) < 0) {
+            printf("Could not execute file\n");
+            exit(1);
+        }
+    }
+    close(fd[1]);
+
+    printf("Output:\n");
+    while (read(fd[0], &buf, 1) > 0) {
+        putchar(buf);
+        binOutput = realloc(binOutput, sizeof(char *) * (i + 2));
+        binOutput[i] = buf;
+        i++;
+    }
+    binOutput[i] = 0;
+
+    filesize = strlen(binOutput);
+    snprintf(charFilesize, 10, "%d", filesize);
+
+    printf("\nsize of output: %d\n", filesize);
+    putchar('\n');
+
+    printf("HTTP/1.1 200\n\n");
+    write(socket, "HTTP/1.1 200\nContent-Length: ", 29);
+    write(socket, charFilesize, strlen(charFilesize));
+    write(socket, "\n\n", 2);
+    write(socket, binOutput, filesize);
+    
+    printf("File execution finished\n");
+
+    wait(NULL);
+    close(fd[0]);
+    if (binOutput) {
+        free(binOutput);
+    }
 }
 
 void analyze_request(char ***request, int socket) {
@@ -165,13 +237,13 @@ void analyze_request(char ***request, int socket) {
     
     int fileType = filetype(request[0][1]);
     switch (fileType) {
-        case 0:
+        case FILE_BINARY:
             // ./resource/cgi-bin/
             pathToFile = malloc(sizeof(char) * (20 + strlen(request[0][1])));
             strncpy(pathToFile, "./resource/cgi-bin/", 20);
             strcat(pathToFile, request[0][1]);
             break;
-        case 3:
+        case FILE_TEXT:
             // ./resource/html/
             pathToFile = malloc(sizeof(char) * (17 + strlen(request[0][1])));
             strncpy(pathToFile, "./resource/html/", 17);
@@ -185,32 +257,23 @@ void analyze_request(char ***request, int socket) {
         write(socket, "HTTP/1.1 404\n", 13);
         write(socket, "Content-Length: 38\n\n", 20);
         write(socket, "<html><h1>Page not found!</h1></html>\n", 38);
+        if (pathToFile) {
+            free(pathToFile);
+        }
         return;
     }
 
-    if (fileType == 0) {
-        // binary stuff
+    if (fileType == FILE_BINARY) {
+        printf("Executing binary file\n");
+        send_bin(pathToFile, request[0][1], socket);
         free(pathToFile);
         return;
     }
 
-    int filesize = get_file_size(pathToFile);
-
-    char charFilesize[11];
-    snprintf(charFilesize, 10, "%d", filesize);
-
-    FILE *fd = fopen(pathToFile, "r");
-    printf("HTTP/1.1 200\n\n");
-    write(socket, "HTTP/1.1 200\nContent-Length: ", 29);
-    write(socket, charFilesize, strlen(charFilesize));
-    write(socket, "\n\n", 2);
-
-    buf = fgetc(fd);
-    while (buf != EOF) {
-        write(socket, &buf, 1);
-        buf = fgetc(fd);
+    if(fileType == FILE_TEXT) {
+        send_text(pathToFile, socket);
     }
-    fclose(fd);
+
     free(pathToFile);
 }
 
@@ -259,9 +322,9 @@ int main(int argc, char** argv) {
                 }
 
                 analyze_request(request, client_socket[i]);
-                printf("filetype = %d\n", filetype(request[0][1]));
+
                 j = 0;
-                while (j < strings) {
+                while (j <= strings) {
                     free_cmd(request[j]);
                     j++;
                 }

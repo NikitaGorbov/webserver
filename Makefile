@@ -2,6 +2,7 @@ all: bin bin/client bin/server
 	
 bin:
 	mkdir bin
+	mkdir resource
 
 bin/client: src/client.c
 	gcc src/client.c -o bin/client
@@ -13,4 +14,4 @@ clean:
 	rm bin/client
 	rm bin/server
 	rmdir bin
-
+	rmdir resource
