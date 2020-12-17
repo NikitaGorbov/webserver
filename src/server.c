@@ -25,6 +25,12 @@ enum typesOfFiles {
     FILE_TEXT
 };
 
+// constant strings used in responses
+char request_404[] = "HTTP/1.1 404\n";
+char request_400[] = "HTTP/1.1 400 Bad Request\n";
+char request_200[] = "HTTP/1.1 200\n";
+char content_length[] = "Content-Length: ";
+
 int init_socket(int port) {
     //open socket, return socket descriptor
     int server_socket = socket(PF_INET, SOCK_STREAM, 0);
@@ -138,7 +144,9 @@ int filetype(char *filename) {
     int i;
     for (i = 0; filename[i]; i++) {
         if (filename[i] == '.') {
-            if (!strcmp(filename + i, ".png")) {
+            if (!strcmp(filename + i, ".png") ||
+                !strcmp(filename + i, ".jpg") ||
+                !strcmp(filename + i, ".ico")) {
                 printf("multimedia\n");
                 return FILE_MULTIMEDIA;
             }
@@ -161,7 +169,8 @@ void send_text(char *pathToFile, int socket) {
 
     FILE *fd = fopen(pathToFile, "r");
     printf("HTTP/1.1 200\n\n");
-    write(socket, "HTTP/1.1 200\nContent-Length: ", 29);
+    write(socket, request_200, strlen(request_200));
+    write(socket, content_length, strlen(content_length));
     write(socket, charFilesize, strlen(charFilesize));
     write(socket, "\n\n", 2);
 
@@ -170,6 +179,30 @@ void send_text(char *pathToFile, int socket) {
         write(socket, &buf, 1);
         buf = fgetc(fd);
     }
+    fclose(fd);
+}
+
+void send_multimedia(char *pathToFile, int socket) {
+    int filesize = get_file_size(pathToFile);
+    unsigned char buf;
+
+    char charFilesize[11];
+    snprintf(charFilesize, 10, "%d", filesize);
+
+    FILE *fd = fopen(pathToFile, "r");
+    printf("HTTP/1.1 200\n\n");
+    write(socket, request_200, strlen(request_200));
+    write(socket, content_length, strlen(content_length));
+    write(socket, charFilesize, strlen(charFilesize));
+    write(socket, "Content-Type: image/jpeg", 24);
+    write(socket, "\n\n", 2);
+
+    buf = fgetc(fd);
+    while (buf != EOF) {
+        write(socket, &buf, 1);
+        buf = fgetc(fd);
+    }
+    printf("Done.\n");
     fclose(fd);
 }
 
@@ -208,7 +241,8 @@ void send_bin(char *pathToFile, char *filename, int socket) {
     putchar('\n');
 
     printf("HTTP/1.1 200\n\n");
-    write(socket, "HTTP/1.1 200\nContent-Length: ", 29);
+    write(socket, request_200, strlen(request_200));
+    write(socket, content_length, strlen(content_length));
     write(socket, charFilesize, strlen(charFilesize));
     write(socket, "\n\n", 2);
     write(socket, binOutput, filesize);
@@ -231,7 +265,7 @@ void analyze_request(char ***request, int socket) {
         !request[0][2] ||
         strcmp(request[0][2], "HTTP/1.1")) {
         printf("HTTP/1.1 400 Bad Request\n");
-        write(socket, "HTTP/1.1 400 Bad Request\n", 25);
+        write(socket, request_400, strlen(request_400));
         return;
     }
     
@@ -249,12 +283,18 @@ void analyze_request(char ***request, int socket) {
             strncpy(pathToFile, "./resource/html/", 17);
             strcat(pathToFile, request[0][1]);
             break;
+        case FILE_MULTIMEDIA:
+            // ./resource/multimedia/
+            pathToFile = malloc(sizeof(char) * (22 + strlen(request[0][1])));
+            strncpy(pathToFile, "./resource/multimedia/", 22);
+            strcat(pathToFile, request[0][1]);
+            break;
     }
     printf("%s\n", pathToFile);
 
     if (!file_exists(pathToFile)) {
         printf("HTTP/1.1 404\n");
-        write(socket, "HTTP/1.1 404\n", 13);
+        write(socket, request_404, strlen(request_404));
         write(socket, "Content-Length: 38\n\n", 20);
         write(socket, "<html><h1>Page not found!</h1></html>\n", 38);
         if (pathToFile) {
@@ -270,8 +310,12 @@ void analyze_request(char ***request, int socket) {
         return;
     }
 
-    if(fileType == FILE_TEXT) {
+    if (fileType == FILE_TEXT) {
         send_text(pathToFile, socket);
+    }
+
+    if (fileType == FILE_MULTIMEDIA) {
+        send_multimedia(pathToFile, socket);
     }
 
     free(pathToFile);
